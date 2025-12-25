@@ -2,9 +2,10 @@ const express = require('express');
 const admin = require('firebase-admin');
 const path = require('path');
 const session = require('express-session');
-const PDFDocument = require('pdfkit'); // PDF Library
+const PDFDocument = require('pdfkit');
 const app = express();
-const PORT = 3000;
+
+const PORT = process.env.PORT || 3000;
 
 app.use(express.json()); 
 app.use(express.urlencoded({ extended: true }));
@@ -15,10 +16,29 @@ app.use(session({
     saveUninitialized: true
 }));
 
-const serviceAccount = require("./serviceAccountKey.json");
-admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+// --- FIREBASE SETUP ---
+// Render पर हम सीधे 'FIREBASE_SERVICE_ACCOUNT' नाम के वेरिएबल से डेटा उठाएंगे
+let serviceAccount;
+
+try {
+    if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+        // Online Server (Render) ke liye
+        serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+    } else {
+        // Local computer ke liye purana tarika
+        serviceAccount = require("./serviceAccountKey.json");
+    }
+
+    if (!admin.apps.length) {
+        admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+    }
+} catch (error) {
+    console.error("Firebase Init Error:", error);
+}
+
 const db = admin.firestore();
 
+// --- SECURITY MIDDLEWARE ---
 function isAuthenticated(req, res, next) {
     if (req.session.isLoggedIn) return next();
     res.redirect('/login');
@@ -28,8 +48,7 @@ function isAuthenticated(req, res, next) {
 
 app.get('/login', (req, res) => {
     res.send(`
-        <html>
-        <head><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"></head>
+        <html><head><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"></head>
         <body class="d-flex align-items-center justify-content-center" style="height: 100vh; background: #f0f2f5;">
             <div class="card p-4 shadow" style="width: 350px;">
                 <h3 class="text-center">Admin Login</h3>
@@ -39,9 +58,7 @@ app.get('/login', (req, res) => {
                     <button class="btn btn-primary w-100">Login</button>
                 </form>
             </div>
-        </body>
-        </html>
-    `);
+        </body></html>`);
 });
 
 app.post('/login', (req, res) => {
@@ -74,87 +91,45 @@ app.post('/add-user', async (req, res) => {
     } catch (error) { res.status(500).send(error.message); }
 });
 
-// Users List with PDF Button
 app.get('/users', isAuthenticated, async (req, res) => {
     const snapshot = await db.collection('smart_users').orderBy('createdAt', 'desc').get();
     let rows = '';
     snapshot.forEach(doc => {
         const data = doc.data();
-        rows += `<tr>
-            <td>${data.name}</td>
-            <td>${data.email}</td>
-            <td>
-                <a href="/download-pdf/${doc.id}" class="btn btn-info btn-sm">PDF Report</a>
-                <a href="/edit/${doc.id}" class="btn btn-warning btn-sm">Edit</a>
-                <a href="/delete/${doc.id}" class="btn btn-danger btn-sm">Delete</a>
-            </td>
-        </tr>`;
+        rows += `<tr><td>${data.name}</td><td>${data.email}</td><td>
+            <a href="/download-pdf/${doc.id}" class="btn btn-info btn-sm">PDF</a>
+            <a href="/edit/${doc.id}" class="btn btn-warning btn-sm">Edit</a>
+            <a href="/delete/${doc.id}" class="btn btn-danger btn-sm">Delete</a>
+        </td></tr>`;
     });
-
-    res.send(`
-        <html>
-        <head><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"></head>
-        <body class="container p-5 text-center">
-            <div class="d-flex justify-content-between mb-4">
-                <h2>🔬 Smart-Lab User Dashboard</h2>
-                <a href="/logout" class="btn btn-outline-danger">Logout</a>
-            </div>
-            <table class="table table-hover table-bordered shadow-sm">
-                <thead class="table-dark"><tr><th>Name</th><th>Email</th><th>Actions</th></tr></thead>
-                <tbody>${rows}</tbody>
-            </table>
-            <a href="/" class="btn btn-success">Add New Patient/User</a>
-        </body>
-        </html>
-    `);
+    res.send(`<html><head><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"></head>
+    <body class="container p-5"><h2>🔬 Smart-Lab Dashboard</h2><table class="table table-bordered mt-3">
+    <thead><tr><th>Name</th><th>Email</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table>
+    <a href="/" class="btn btn-success">Add New Patient</a> <a href="/logout" class="btn btn-danger">Logout</a></body></html>`);
 });
 
-// --- PDF GENERATION ROUTE ---
 app.get('/download-pdf/:id', isAuthenticated, async (req, res) => {
     try {
         const docSnap = await db.collection('smart_users').doc(req.params.id).get();
-        if (!docSnap.exists) return res.send("User not found");
-        
         const userData = docSnap.data();
-
-        // PDF Create karein
         const doc = new PDFDocument();
-        let filename = `Report-${userData.name}.pdf`;
-
-        // HTTP Header set karein taaki browser ise download kare
-        res.setHeader('Content-disposition', 'attachment; filename="' + filename + '"');
+        res.setHeader('Content-disposition', 'attachment; filename="Report.pdf"');
         res.setHeader('Content-type', 'application/pdf');
-
         doc.pipe(res);
-
-        // PDF Content
         doc.fontSize(25).text('🔬 SMART-LAB REPORT', { align: 'center' });
-        doc.moveDown();
-        doc.fontSize(16).text(`Date: ${new Date().toLocaleDateString()}`);
-        doc.text('------------------------------------------');
-        doc.moveDown();
-        doc.fontSize(14).text(`Patient Name: ${userData.name}`);
-        doc.text(`Email Address: ${userData.email}`);
-        doc.moveDown();
-        doc.text('Status: Registered Successfully');
-        doc.moveDown();
-        doc.fontSize(10).text('Note: This is a computer generated report.', { align: 'center' });
-
+        doc.moveDown().fontSize(14).text(`Patient Name: ${userData.name}`);
+        doc.text(`Email: ${userData.email}`);
         doc.end();
-
     } catch (error) { res.status(500).send(error.message); }
 });
 
-// Edit & Delete logic
 app.get('/edit/:id', isAuthenticated, async (req, res) => {
     const doc = await db.collection('smart_users').doc(req.params.id).get();
     const data = doc.data();
-    res.send(`<html><head><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"></head>
-    <body class="container p-5"><h3>Update User</h3>
-    <form action="/update/${doc.id}" method="POST">
-        <input name="userName" value="${data.name}" class="form-control mb-2">
-        <input name="userEmail" value="${data.email}" class="form-control mb-2">
-        <button class="btn btn-success">Update</button></form></body></html>`);
+    res.send(`<html><body class="container p-5"><form action="/update/${doc.id}" method="POST">
+    <input name="userName" value="${data.name}" class="form-control mb-2">
+    <input name="userEmail" value="${data.email}" class="form-control mb-2">
+    <button class="btn btn-success">Update</button></form></body></html>`);
 });
 
 app.post('/update/:id', isAuthenticated, async (req, res) => {
