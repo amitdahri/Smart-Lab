@@ -1,0 +1,19 @@
+{
+  "name": "smart-lab",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node App.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "express": "^5.2.1",
+    "express-session": "^1.18.2",
+    "firebase-admin": "^13.6.0",
+    "pdfkit": "^0.17.2"
+  }
+}
